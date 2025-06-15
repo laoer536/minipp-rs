@@ -1,4 +1,5 @@
 use crate::with_dot;
+use ignore::gitignore::GitignoreBuilder;
 use serde::Deserialize;
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -83,6 +84,27 @@ pub fn has_file_extension(file_path: &str) -> bool {
     }
 }
 
+pub fn multi_pattern_filter(files: &[String], patterns: &[String]) -> Vec<String> {
+    // 创建忽略规则构建器（当前目录为根）
+    let mut builder = GitignoreBuilder::new("");
+    // 添加所有 pattern
+    for pat in patterns {
+        builder.add_line(None, pat).unwrap();
+    }
+    let gitignore = builder.build().unwrap();
+
+    files
+        .iter()
+        .filter(|file| {
+            // 用 matched_path_or_any_parents 来递归判断父目录是否被 ignore
+            !gitignore
+                .matched_path_or_any_parents(Path::new(file), false)
+                .is_ignore()
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +168,58 @@ mod tests {
     fn test_has_file_extension() {
         assert_eq!(has_file_extension("src/main.rs"), false);
         assert_eq!(has_file_extension("src/main.ts"), true)
+    }
+
+    #[test]
+    fn test_multi_pattern_filter_basic() {
+        let files = vec![
+            "foo.txt".to_string(),
+            "bar.log".to_string(),
+            "baz/test.txt".to_string(),
+            "baz/foo.log".to_string(),
+            "qux.rs".to_string(),
+        ];
+        let patterns = vec!["*.log".to_string(), "baz/".to_string()];
+        let filtered = multi_pattern_filter(&files, &patterns);
+        assert_eq!(filtered, vec!["foo.txt".to_string(), "qux.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_multi_pattern_filter_no_patterns() {
+        let files = vec!["foo.txt".to_string(), "bar.log".to_string()];
+        let patterns: Vec<String> = vec![];
+        let filtered = multi_pattern_filter(&files, &patterns);
+        assert_eq!(filtered, files);
+    }
+
+    #[test]
+    fn test_multi_pattern_filter_all_ignored() {
+        let files = vec![
+            "foo.txt".to_string(),
+            "bar.log".to_string(),
+            "baz/test.txt".to_string(),
+        ];
+        let patterns = vec!["*".to_string()];
+        let filtered = multi_pattern_filter(&files, &patterns);
+        assert_eq!(filtered, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_multi_pattern_filter_negation() {
+        let files = vec![
+            "foo.txt".to_string(),
+            "bar.log".to_string(),
+            "baz/test.txt".to_string(),
+        ];
+        let patterns = vec!["*.log".to_string(), "!bar.log".to_string()];
+        let filtered = multi_pattern_filter(&files, &patterns);
+        assert_eq!(
+            filtered,
+            vec![
+                "foo.txt".to_string(),
+                "bar.log".to_string(),
+                "baz/test.txt".to_string()
+            ]
+        );
     }
 }
