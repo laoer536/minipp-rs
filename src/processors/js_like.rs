@@ -34,7 +34,7 @@ impl Visit for ImportCollector {
 fn parse_ts_or_tsx(code: String) -> Module {
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone()));
-    let fm = cm.new_source_file(FileName::Custom("test.js".into()).into(), code);
+    let fm = cm.new_source_file(FileName::Custom("virtual.tsx".into()).into(), code);
     let lexer = Lexer::new(
         // We want to parse ecmascript
         Syntax::Typescript(TsSyntax {

@@ -2,6 +2,26 @@
 name = "minipp_rs"
 version = "0.1.0"
 edition = "2024"
+description = "Quickly help you find files that are not being used in your project, and slim down your project."
+authors = ["laoer536 <https://neo-liu.netlify.app/>"]
+license = "MIT"
+repository = "https://github.com/laoer536/minipp-rs.git"
+homepage = "https://github.com/laoer536/minipp-rs#readme"
+keywords = [
+    "unused-files",
+    "dead-dependencies",
+    "frontend",
+    "file-tracking",
+    "project-cleanup"
+]
+readme = "README.md"
+
+[package.metadata]
+bugs = "https://github.com/laoer536/minipp-rs/issues"
+
+[[bin]]
+name = "minipp"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
