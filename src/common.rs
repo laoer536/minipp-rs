@@ -8,17 +8,19 @@ use std::path::PathBuf;
 #[derive(Default, Debug, Deserialize)]
 pub struct ProjectDependencies {
     #[serde(rename = "dependencies")]
-    dependencies: HashMap<String, String>,
+    dependencies: Option<HashMap<String, String>>,
     #[serde(rename = "devDependencies")]
-    dev_dependencies: HashMap<String, String>,
+    dev_dependencies: Option<HashMap<String, String>>,
 }
 
 impl ProjectDependencies {
     pub fn all_dependencies(&self) -> HashSet<String> {
         let mut set: HashSet<String> = HashSet::new();
-        for map in [&self.dependencies, &self.dev_dependencies] {
-            for (k, _) in map {
-                set.insert(k.to_string());
+        for map_option in [&self.dependencies, &self.dev_dependencies] {
+            if let Some(map) = map_option {
+                for (k, _) in map {
+                    set.insert(k.to_string());
+                }
             }
         }
         set
@@ -36,13 +38,13 @@ pub struct MinippConfig {
 pub const BACK_UP_FOLDER: &str = "minipp-delete-files";
 
 pub const SUPPORT_FILE_TYPES: [&str; 18] = [
-    "css", "tsx", "less", "scss", "css", "png", "jpg", "jpeg", "gif", "svg", "mp3", "mp4", "wav",
+    "ts", "tsx", "less", "scss", "css", "png", "jpg", "jpeg", "gif", "svg", "mp3", "mp4", "wav",
     "woff", "woff2", "ttf", "eot", "json",
 ];
 
 // This is just for the convenience of copying, of course, it is completely possible to write them one by one instead of using macro_rules.
 pub const SUPPORT_FILE_TYPES_WITH_DOT: [&str; 18] = with_dot![
-    "css", "tsx", "less", "scss", "css", "png", "jpg", "jpeg", "gif", "svg", "mp3", "mp4", "wav",
+    "ts", "tsx", "less", "scss", "css", "png", "jpg", "jpeg", "gif", "svg", "mp3", "mp4", "wav",
     "woff", "woff2", "ttf", "eot", "json"
 ];
 
@@ -66,7 +68,7 @@ mod tests {
         assert_eq!(
             SUPPORT_FILE_TYPES_WITH_DOT,
             [
-                ".css", ".tsx", ".less", ".scss", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+                ".ts", ".tsx", ".less", ".scss", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
                 ".mp3", ".mp4", ".wav", ".woff", ".woff2", ".ttf", ".eot", ".json",
             ]
         )
