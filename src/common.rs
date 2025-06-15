@@ -16,11 +16,10 @@ pub struct ProjectDependencies {
 impl ProjectDependencies {
     pub fn all_dependencies(&self) -> HashSet<String> {
         let mut set: HashSet<String> = HashSet::new();
-        for (k, _) in self.dependencies.iter() {
-            set.insert(k.to_string());
-        }
-        for (k, _) in self.dev_dependencies.iter() {
-            set.insert(k.to_string());
+        for map in [&self.dependencies, &self.dev_dependencies] {
+            for (k, _) in map {
+                set.insert(k.to_string());
+            }
         }
         set
     }
