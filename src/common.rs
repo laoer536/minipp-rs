@@ -2,8 +2,8 @@ use crate::with_dot;
 use serde::Deserialize;
 use serde_json;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 #[derive(Default, Debug, Deserialize)]
 pub struct ProjectDependencies {
@@ -27,12 +27,16 @@ impl ProjectDependencies {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Deserialize, PartialEq)]
 pub struct MinippConfig {
-    need_del: bool,
-    ignore_ext: Vec<String>,
-    ignore_files: Vec<String>,
-    ignore_dependencies: Vec<String>,
+    #[serde(rename = "needDel")]
+    need_del: Option<bool>,
+    #[serde(rename = "ignoreExt")]
+    ignore_ext: Option<Vec<String>>,
+    #[serde(rename = "ignoreFiles")]
+    ignore_files: Option<Vec<String>>,
+    #[serde(rename = "ignoreDependencies")]
+    ignore_dependencies: Option<Vec<String>>,
 }
 
 pub const BACK_UP_FOLDER: &str = "minipp-delete-files";
@@ -59,10 +63,32 @@ pub fn get_project_dependencies(project_root: &str) -> HashSet<String> {
     dependencies_info.all_dependencies()
 }
 
+pub fn get_cli_arg_root_path() -> Option<String> {
+    env::args().into_iter().nth(1)
+}
+
+pub fn load_user_config(project_root: &str) -> MinippConfig {
+    let user_json_config_path = PathBuf::from(project_root).join("minipp.config.json");
+    let user_json_config_str = fs::read_to_string(user_json_config_path).unwrap();
+    let user_config: MinippConfig = serde_json::from_str(user_json_config_str.as_str()).unwrap();
+    user_config
+}
+
+pub fn has_file_extension(file_path: &str) -> bool {
+    let ext_option = Path::new(file_path).extension();
+    if let Some(ext) = ext_option {
+        SUPPORT_FILE_TYPES.contains(&ext.to_str().unwrap())
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{get_project_dependencies, SUPPORT_FILE_TYPES_WITH_DOT};
-    use std::collections::HashSet;
+    use super::*;
+
+    const USER_ROOT_PATH: &str = "/Users/neo/Desktop/neo/github/minip";
+
     #[test]
     fn file_types_should_dot() {
         assert_eq!(
@@ -76,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_get_project_dependencies() {
-        let project_root = "/Users/neo/Desktop/neo/github/minip";
+        let project_root = USER_ROOT_PATH;
         let project_dependencies = get_project_dependencies(project_root);
         let should_result = HashSet::from([
             "@swc/cli",
@@ -100,5 +126,25 @@ mod tests {
         .map(|dependence| dependence.to_string())
         .collect();
         assert_eq!(project_dependencies, should_result);
+    }
+
+    #[test]
+    fn test_load_user_config() {
+        let project_root = USER_ROOT_PATH;
+        assert_eq!(
+            load_user_config(project_root),
+            MinippConfig {
+                need_del: Some(false),
+                ignore_ext: None,
+                ignore_files: Some(vec!["src/index.ts".to_string(), "src/core/**".to_string()]),
+                ignore_dependencies: Some(vec!["@types*".to_string(), "eslint".to_string()]),
+            }
+        );
+    }
+
+    #[test]
+    fn test_has_file_extension() {
+        assert_eq!(has_file_extension("src/main.rs"), false);
+        assert_eq!(has_file_extension("src/main.ts"), true)
     }
 }
