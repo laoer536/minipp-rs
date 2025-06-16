@@ -7,18 +7,34 @@ use swc_common::errors::{ColorConfig, Handler};
 use swc_common::input::StringInput;
 use swc_common::sync::Lrc;
 use swc_common::{FileName, SourceMap};
-use swc_ecma_ast::{CallExpr, EsVersion, ImportDecl, JSXAttr, Module};
+use swc_ecma_ast::{CallExpr, Callee, EsVersion, Expr, ImportDecl, JSXAttr, JSXExpr, Module};
+use swc_ecma_ast::{JSXAttrValue, Lit};
 use swc_ecma_parser::{Lexer, Parser, Syntax, TsSyntax};
 use swc_ecma_visit::{Visit, VisitWith};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ImportCollector {
     imports: HashSet<String>,
 }
 
+impl ImportCollector {
+    fn deal_jsx_attr_insert(&mut self, path: &str) {
+        if has_file_extension(path) {
+            self.imports.insert(path.to_string());
+        }
+    }
+}
+
 impl Visit for ImportCollector {
     fn visit_call_expr(&mut self, node: &CallExpr) {
-        //TODO
+        if let Callee::Import(_i) = &node.callee {
+            for arg in &node.args {
+                let expr = &*arg.expr;
+                if let Expr::Lit(Lit::Str(s)) = expr {
+                    self.imports.insert(s.value.to_string());
+                }
+            }
+        }
         node.visit_children_with(self)
     }
     fn visit_import_decl(&mut self, import_node: &ImportDecl) {
@@ -28,7 +44,29 @@ impl Visit for ImportCollector {
     }
 
     fn visit_jsx_attr(&mut self, node: &JSXAttr) {
-        //TODO
+        if let Some(value) = &node.value {
+            match value {
+                JSXAttrValue::Lit(Lit::Str(s)) => {
+                    self.deal_jsx_attr_insert(s.value.as_str());
+                }
+                JSXAttrValue::JSXExprContainer(jsx_expr_container) => {
+                    if let JSXExpr::Expr(expr) = &jsx_expr_container.expr {
+                        match &**expr {
+                            Expr::Lit(Lit::Str(s)) => {
+                                self.deal_jsx_attr_insert(s.value.as_str());
+                            }
+                            Expr::Tpl(tpl) => {
+                                for quasi in &tpl.quasis {
+                                    self.deal_jsx_attr_insert(quasi.raw.as_str())
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         node.visit_children_with(self)
     }
 }
@@ -170,5 +208,88 @@ mod tests {
             .iter()
             .any(|item| matches!(item, ModuleItem::ModuleDecl(_)));
         assert!(has_export, "Should have at least one export in TSX code");
+    }
+
+    #[test]
+    fn should_collect_import() {
+        let code: String = String::from(
+            r#"
+import {
+  type ImportDeclaration,
+  parse,
+  type TsType,
+  type JSXAttribute,
+  type CallExpression,
+  type Expression,
+} from '@swc/core'
+import Visitor from '../visitor'
+import { glob } from 'glob'
+import path from 'path'
+import fs from 'fs'
+import { styleText } from 'util'
+import { hasFileExtension } from '../common'
+        "#,
+        );
+        let module = parse_ts_or_tsx(code);
+        let mut import_collector = ImportCollector::default();
+        module.visit_with(&mut import_collector);
+        let should_res = HashSet::from(
+            [
+                "../common",
+                "fs",
+                "util",
+                "@swc/core",
+                "path",
+                "../common",
+                "glob",
+                "../visitor",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(import_collector.imports, should_res);
+    }
+
+    #[test]
+    fn should_collect_dy_import() {
+        let code = String::from(
+            r#"
+        const index: Map<number, React.ComponentType<ContentFormStep3Interface>> = new Map()
+  .set(
+    20,
+    React.lazy(() => import('./Type20'))
+  )
+  .set(
+    2,
+    React.lazy(() => import('./Type19'))
+  );
+        "#,
+        );
+        let module = parse_ts_or_tsx(code);
+        let mut import_collector = ImportCollector::default();
+        module.visit_with(&mut import_collector);
+        let should_res = HashSet::from(["./Type19", "./Type20"].map(String::from));
+        assert_eq!(import_collector.imports, should_res);
+    }
+
+    #[test]
+    fn should_collect_assets_import() {
+        let code = String::from(
+            r#"
+export default function DomStringSrcTest() {
+  return (
+    <div>
+      {/* 直接字符串路径 */}
+      <img src={"./assets/b.jpg"} alt="花括号字符串字面量" />
+      <img src="./assets/a.jpg" alt="花括号字符串字面量" />
+    </div>
+  );
+}
+        "#,
+        );
+        let module = parse_ts_or_tsx(code);
+        let mut import_collector = ImportCollector::default();
+        module.visit_with(&mut import_collector);
+        let should_res = HashSet::from(["./assets/b.jpg", "./assets/a.jpg"].map(String::from));
+        assert_eq!(import_collector.imports, should_res);
     }
 }
