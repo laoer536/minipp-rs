@@ -1,12 +1,14 @@
+use glob::glob;
 use regex::Regex;
 use std::collections::HashSet;
+use std::fs;
 
 #[derive(Default, Debug)]
-struct ImportCollector {
-    imports: HashSet<String>,
+pub struct StyleImportCollector {
+    pub imports: HashSet<String>,
 }
 
-impl ImportCollector {
+impl StyleImportCollector {
     pub fn insert_from_code(&mut self, code: &str) {
         let imports = get_extract_style_imports(code);
         self.imports.extend(imports);
@@ -42,6 +44,25 @@ fn get_extract_style_imports(code: &str) -> Vec<String> {
         }
     }
     result
+}
+
+pub fn get_style_like_import_info() -> StyleImportCollector {
+    let mut style_import_collector = StyleImportCollector::default();
+    let patterns = ["src/**/*.css", "src/**/*.less", "src/**/*.scss"];
+    for pattern in patterns {
+        for entry in glob(pattern).expect("Failed to read glob pattern") {
+            match entry {
+                Ok(path) => {
+                    if path.is_file() {
+                        let code = fs::read_to_string(path).unwrap();
+                        style_import_collector.insert_from_code(&code);
+                    }
+                }
+                Err(e) => println!("{:?}", e),
+            }
+        }
+    }
+    style_import_collector
 }
 
 #[cfg(test)]
