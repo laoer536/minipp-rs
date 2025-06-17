@@ -15,6 +15,7 @@ use swc_ecma_visit::{Visit, VisitWith};
 #[derive(Default, Debug)]
 struct ImportCollector {
     imports: HashSet<String>,
+    dependencies: HashSet<String>,
 }
 
 impl ImportCollector {
@@ -71,10 +72,13 @@ impl Visit for ImportCollector {
     }
 }
 
-fn parse_ts_or_tsx(code: String) -> Module {
+fn parse_ts_or_tsx(code: &str) -> Module {
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone()));
-    let fm = cm.new_source_file(FileName::Custom("virtual.tsx".into()).into(), code);
+    let fm = cm.new_source_file(
+        FileName::Custom("virtual.tsx".into()).into(),
+        code.to_string(),
+    );
     let lexer = Lexer::new(
         // We want to parse ecmascript
         Syntax::Typescript(TsSyntax {
@@ -104,7 +108,7 @@ fn parse_ts_or_tsx(code: String) -> Module {
     module
 }
 
-fn try_to_find_files_without_a_suffix(relative_path_for_project: String) -> String {
+fn try_to_find_files_without_a_suffix(relative_path_for_project: &str) -> String {
     let candidates = [
         format!("{}.ts", relative_path_for_project),
         format!("{}.tsx", relative_path_for_project),
@@ -132,7 +136,7 @@ pub fn get_js_like_import_info() {
             Ok(path) => {
                 if path.is_file() {
                     let code = fs::read_to_string(path).unwrap();
-                    let module = parse_ts_or_tsx(code);
+                    let module = parse_ts_or_tsx(code.as_str());
                     module.visit_with(&mut import_collector);
                 }
             }
@@ -147,7 +151,7 @@ fn path_to_real_path(current_file_path: String, import_path: String) -> String {
         return if has_file_extension(&relative_path_for_project) {
             relative_path_for_project
         } else {
-            try_to_find_files_without_a_suffix(relative_path_for_project)
+            try_to_find_files_without_a_suffix(&relative_path_for_project)
         };
     }
 
@@ -170,7 +174,7 @@ fn path_to_real_path(current_file_path: String, import_path: String) -> String {
         return if has_file_extension(&relative_path_for_project) {
             relative_path_for_project
         } else {
-            try_to_find_files_without_a_suffix(relative_path_for_project)
+            try_to_find_files_without_a_suffix(&relative_path_for_project)
         };
     }
     import_path
@@ -184,7 +188,7 @@ mod tests {
     #[test]
     fn test_parse_ts_code() {
         let code = "const a: number = 123;";
-        let module: Module = parse_ts_or_tsx(code.to_string());
+        let module: Module = parse_ts_or_tsx(code);
         assert!(
             !module.body.is_empty(),
             "TS parse result should not be empty"
@@ -196,7 +200,7 @@ mod tests {
             import React from 'react';
             export const App = () => <div>Hello TSX</div>;
         "#;
-        let module: Module = parse_ts_or_tsx(code.to_string());
+        let module: Module = parse_ts_or_tsx(code);
         assert!(
             !module.body.is_empty(),
             "TSX parse result should not be empty"
@@ -212,8 +216,7 @@ mod tests {
 
     #[test]
     fn should_collect_import() {
-        let code: String = String::from(
-            r#"
+        let code = r#"
 import {
   type ImportDeclaration,
   parse,
@@ -228,8 +231,7 @@ import path from 'path'
 import fs from 'fs'
 import { styleText } from 'util'
 import { hasFileExtension } from '../common'
-        "#,
-        );
+        "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
         module.visit_with(&mut import_collector);
@@ -251,8 +253,7 @@ import { hasFileExtension } from '../common'
 
     #[test]
     fn should_collect_dy_import() {
-        let code = String::from(
-            r#"
+        let code = r#"
         const index: Map<number, React.ComponentType<ContentFormStep3Interface>> = new Map()
   .set(
     20,
@@ -262,8 +263,7 @@ import { hasFileExtension } from '../common'
     2,
     React.lazy(() => import('./Type19'))
   );
-        "#,
-        );
+        "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
         module.visit_with(&mut import_collector);
@@ -273,8 +273,7 @@ import { hasFileExtension } from '../common'
 
     #[test]
     fn should_collect_assets_import() {
-        let code = String::from(
-            r#"
+        let code = r#"
 export default function DomStringSrcTest() {
   return (
     <div>
@@ -284,8 +283,7 @@ export default function DomStringSrcTest() {
     </div>
   );
 }
-        "#,
-        );
+        "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
         module.visit_with(&mut import_collector);
