@@ -1,9 +1,10 @@
 use crate::common::has_file_extension;
 use glob::glob;
+use path_clean::clean;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::{env, fs, io};
+use std::path::Path;
+use std::{fs, io};
 use swc_common::errors::{ColorConfig, Handler};
 use swc_common::input::StringInput;
 use swc_common::sync::Lrc;
@@ -13,16 +14,27 @@ use swc_ecma_ast::{JSXAttrValue, Lit};
 use swc_ecma_parser::{Lexer, Parser, Syntax, TsSyntax};
 use swc_ecma_visit::{Visit, VisitWith};
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug)]
 pub struct ImportCollector {
     pub imports: HashSet<String>,
     pub dependencies: HashSet<String>,
+    pub current_file_path: String,
 }
 
 impl ImportCollector {
     fn deal_jsx_attr_insert(&mut self, path: &str) {
         if has_file_extension(path) {
-            self.imports.insert(path.to_string());
+            let real_path = path_to_real_path(self.current_file_path.as_str(), path);
+            if let Ok(s) = real_path {
+                self.imports.insert(s);
+            }
+        }
+    }
+
+    fn common_insert(&mut self, path: &str) {
+        let real_path = path_to_real_path(self.current_file_path.as_str(), path);
+        if let Ok(s) = real_path {
+            self.imports.insert(s);
         }
     }
 }
@@ -33,7 +45,7 @@ impl Visit for ImportCollector {
             for arg in &node.args {
                 let expr = &*arg.expr;
                 if let Expr::Lit(Lit::Str(s)) = expr {
-                    self.imports.insert(s.value.to_string());
+                    self.common_insert(&s.value);
                 }
             }
         }
@@ -41,7 +53,7 @@ impl Visit for ImportCollector {
     }
     fn visit_import_decl(&mut self, import_node: &ImportDecl) {
         let import = import_node.src.value.to_string();
-        self.imports.insert(import);
+        self.common_insert(&import);
         import_node.visit_children_with(self);
     }
 
@@ -138,9 +150,14 @@ pub fn get_js_like_import_info() -> ImportCollector {
             match entry {
                 Ok(path) => {
                     if path.is_file() {
-                        match fs::read_to_string(path) {
+                        match fs::read_to_string(&path) {
                             Ok(code) => {
                                 let module = parse_ts_or_tsx(code.as_str());
+                                import_collector.current_file_path = match path.to_str() {
+                                    Some(path) => path.to_string(),
+                                    None => continue,
+                                };
+                                // path.to_str().unwrap().to_string();
                                 module.visit_with(&mut import_collector);
                             }
                             Err(e) => {
@@ -160,43 +177,34 @@ pub fn get_js_like_import_info() -> ImportCollector {
     import_collector
 }
 
-fn path_to_real_path(current_file_path: String, import_path: String) -> Result<String, io::Error> {
+fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<String, io::Error> {
     if import_path.starts_with("@/") {
-        let relative_path_for_project = import_path.replace("@/", "src/");
-        return if has_file_extension(&relative_path_for_project) {
-            Ok(relative_path_for_project)
-        } else {
-            Ok(try_to_find_files_without_a_suffix(
-                &relative_path_for_project,
-            ))
-        };
+        return Ok(current_file_path.replace("@/", "src/"));
     }
 
-    if import_path.starts_with("..") || import_path.starts_with(".") {
-        let get_path = |base: &str, path: &str| -> Result<String, io::Error> {
-            let buf = PathBuf::from(base).join(path).canonicalize()?;
-            Ok(buf
-                .to_str()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Invalid UTF-8 path"))?
-                .to_string())
-        };
-        let absolute_path = get_path(&current_file_path, &import_path)?;
-        let current_dir = env::current_dir()?;
-        let relative_path_for_project = get_path(
-            current_dir
-                .to_str()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Invalid UTF-8 path"))?,
-            &absolute_path,
-        )?;
-        return if has_file_extension(&relative_path_for_project) {
-            Ok(relative_path_for_project)
-        } else {
-            Ok(try_to_find_files_without_a_suffix(
-                &relative_path_for_project,
-            ))
-        };
+    if !import_path.starts_with("..") || !import_path.starts_with(".") {
+        return Ok(import_path.to_string());
     }
-    Ok(import_path)
+    // 创建基础路径并获取父目录
+    let base_path = Path::new(current_file_path);
+    let parent = base_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Current path has no parent directory",
+        )
+    })?;
+
+    // 构建完整路径并解析为规范路径
+    let full_path = parent.join(import_path);
+    let canonical_path = clean(&full_path);
+
+    // 转换为字符串（处理无效Unicode）
+    canonical_path.into_os_string().into_string().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Path contains invalid UTF-8 characters",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -253,17 +261,17 @@ import { hasFileExtension } from '../common'
         "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
+        import_collector.current_file_path = String::from("src/core/cli/index.ts");
         module.visit_with(&mut import_collector);
         let should_res = HashSet::from(
             [
-                "../common",
+                "src/core/common",
                 "fs",
                 "util",
                 "@swc/core",
                 "path",
-                "../common",
                 "glob",
-                "../visitor",
+                "src/core/visitor",
             ]
             .map(String::from),
         );
@@ -308,5 +316,16 @@ export default function DomStringSrcTest() {
         module.visit_with(&mut import_collector);
         let should_res = HashSet::from(["./assets/b.jpg", "./assets/a.jpg"].map(String::from));
         assert_eq!(import_collector.imports, should_res);
+    }
+
+    #[test]
+    fn test_path_to_real_path() {
+        let current_path = "src/components/CourseForm/index.tsx";
+        let import_path = "../ColorPicker";
+        let should_path = "src/components/ColorPicker";
+        assert_eq!(
+            path_to_real_path(current_path, import_path).unwrap(),
+            should_path.to_string()
+        );
     }
 }

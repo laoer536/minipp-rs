@@ -33,3 +33,4 @@ swc_common = { version = "12.0.1", features = ["tty-emitter"] }
 swc_ecma_visit = "12.0.0"
 glob = "0.3.2"
 regex = "1.11.1"
+path-clean = "1.0.1"

@@ -1,18 +1,25 @@
-use minipp_rs::processors::js_like::{get_js_like_import_info, ImportCollector};
+use minipp_rs::processors::js_like::get_js_like_import_info;
 use minipp_rs::processors::style_like::get_style_like_import_info;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 
+#[derive(Serialize)]
+struct AllImport {
+    imports: HashSet<String>,
+    dependencies: HashSet<String>,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let js_like_import = get_js_like_import_info();
     let style_like_import = get_style_like_import_info();
-    let all_import = ImportCollector {
+    let all_import = AllImport {
         dependencies: js_like_import.dependencies,
         imports: js_like_import
             .imports
-            .into_iter() // 获取所有权
-            .chain(style_like_import.imports) // 链接另一个集合
+            .into_iter()
+            .chain(style_like_import.imports)
             .collect::<HashSet<_>>(),
     };
     let all_import_str = serde_json::to_string(&all_import)?;
