@@ -1,7 +1,6 @@
 use crate::common::has_file_extension;
 use glob::glob;
 use path_clean::clean;
-use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 use std::{fs, io};
@@ -19,12 +18,13 @@ pub struct ImportCollector {
     pub imports: HashSet<String>,
     pub dependencies: HashSet<String>,
     pub current_file_path: String,
+    pub all_files: HashSet<String>,
 }
 
 impl ImportCollector {
-    fn deal_jsx_attr_insert(&mut self, path: &str) {
+    fn jsx_attr_insert(&mut self, path: &str) {
         if has_file_extension(path) {
-            let real_path = path_to_real_path(self.current_file_path.as_str(), path);
+            let real_path = path_to_real_path(&self.current_file_path, path);
             if let Ok(s) = real_path {
                 self.imports.insert(s);
             }
@@ -34,7 +34,11 @@ impl ImportCollector {
     fn common_insert(&mut self, path: &str) {
         let real_path = path_to_real_path(self.current_file_path.as_str(), path);
         if let Ok(s) = real_path {
-            self.imports.insert(s);
+            if s.starts_with("src/") {
+                self.imports.insert(s);
+            } else {
+                self.dependencies.insert(s);
+            }
         }
     }
 }
@@ -61,17 +65,17 @@ impl Visit for ImportCollector {
         if let Some(value) = &node.value {
             match value {
                 JSXAttrValue::Lit(Lit::Str(s)) => {
-                    self.deal_jsx_attr_insert(s.value.as_str());
+                    self.jsx_attr_insert(&s.value);
                 }
                 JSXAttrValue::JSXExprContainer(jsx_expr_container) => {
                     if let JSXExpr::Expr(expr) = &jsx_expr_container.expr {
                         match &**expr {
                             Expr::Lit(Lit::Str(s)) => {
-                                self.deal_jsx_attr_insert(s.value.as_str());
+                                self.jsx_attr_insert(&s.value);
                             }
                             Expr::Tpl(tpl) => {
                                 for quasi in &tpl.quasis {
-                                    self.deal_jsx_attr_insert(quasi.raw.as_str())
+                                    self.jsx_attr_insert(&quasi.raw)
                                 }
                             }
                             _ => {}
@@ -121,7 +125,13 @@ fn parse_ts_or_tsx(code: &str) -> Module {
     module
 }
 
-fn try_to_find_files_without_a_suffix(relative_path_for_project: &str) -> String {
+pub fn try_to_find_files_without_a_suffix(
+    relative_path_for_project: &str,
+    all_files: &HashSet<String>,
+) -> String {
+    if has_file_extension(relative_path_for_project) {
+        return relative_path_for_project.into();
+    }
     let candidates = [
         format!("{}.ts", relative_path_for_project),
         format!("{}.tsx", relative_path_for_project),
@@ -132,7 +142,7 @@ fn try_to_find_files_without_a_suffix(relative_path_for_project: &str) -> String
     ];
 
     for candidate in &candidates {
-        if Path::new(&candidate).exists() {
+        if all_files.contains(candidate) {
             return candidate.to_string();
         }
     }
@@ -153,8 +163,11 @@ pub fn get_js_like_import_info() -> ImportCollector {
                         match fs::read_to_string(&path) {
                             Ok(code) => {
                                 let module = parse_ts_or_tsx(code.as_str());
-                                import_collector.current_file_path = match path.to_str() {
-                                    Some(path) => path.to_string(),
+                                match path.to_str() {
+                                    Some(path) => {
+                                        import_collector.current_file_path = path.to_string();
+                                        import_collector.all_files.insert(path.to_string());
+                                    }
                                     None => continue,
                                 };
                                 // path.to_str().unwrap().to_string();
@@ -182,29 +195,30 @@ fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<Strin
         return Ok(current_file_path.replace("@/", "src/"));
     }
 
-    if !import_path.starts_with("..") || !import_path.starts_with(".") {
-        return Ok(import_path.to_string());
+    if import_path.starts_with("..") || import_path.starts_with(".") {
+        // 创建基础路径并获取父目录
+        let base_path = Path::new(current_file_path);
+        let parent = base_path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Current path has no parent directory",
+            )
+        })?;
+
+        // 构建完整路径并解析为规范路径
+        let full_path = parent.join(import_path);
+        let canonical_path = clean(&full_path);
+
+        // 转换为字符串（处理无效Unicode）
+        canonical_path.into_os_string().into_string().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Path contains invalid UTF-8 characters",
+            )
+        })
+    } else {
+        Ok(import_path.to_string())
     }
-    // 创建基础路径并获取父目录
-    let base_path = Path::new(current_file_path);
-    let parent = base_path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Current path has no parent directory",
-        )
-    })?;
-
-    // 构建完整路径并解析为规范路径
-    let full_path = parent.join(import_path);
-    let canonical_path = clean(&full_path);
-
-    // 转换为字符串（处理无效Unicode）
-    canonical_path.into_os_string().into_string().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Path contains invalid UTF-8 characters",
-        )
-    })
 }
 
 #[cfg(test)]
@@ -263,19 +277,12 @@ import { hasFileExtension } from '../common'
         let mut import_collector = ImportCollector::default();
         import_collector.current_file_path = String::from("src/core/cli/index.ts");
         module.visit_with(&mut import_collector);
-        let should_res = HashSet::from(
-            [
-                "src/core/common",
-                "fs",
-                "util",
-                "@swc/core",
-                "path",
-                "glob",
-                "src/core/visitor",
-            ]
-            .map(String::from),
-        );
-        assert_eq!(import_collector.imports, should_res);
+        let should_import_res =
+            HashSet::from(["src/core/common", "src/core/visitor"].map(String::from));
+        let should_dependence_res =
+            HashSet::from(["fs", "util", "@swc/core", "path", "glob"].map(String::from));
+        assert_eq!(import_collector.imports, should_import_res);
+        assert_eq!(import_collector.dependencies, should_dependence_res);
     }
 
     #[test]
@@ -293,8 +300,10 @@ import { hasFileExtension } from '../common'
         "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
+        import_collector.current_file_path = String::from("src/core/cli/index.ts");
         module.visit_with(&mut import_collector);
-        let should_res = HashSet::from(["./Type19", "./Type20"].map(String::from));
+        let should_res =
+            HashSet::from(["src/core/cli/Type19", "src/core/cli/Type20"].map(String::from));
         assert_eq!(import_collector.imports, should_res);
     }
 
@@ -313,8 +322,9 @@ export default function DomStringSrcTest() {
         "#;
         let module = parse_ts_or_tsx(code);
         let mut import_collector = ImportCollector::default();
+        import_collector.current_file_path = String::from("src/index.tsx");
         module.visit_with(&mut import_collector);
-        let should_res = HashSet::from(["./assets/b.jpg", "./assets/a.jpg"].map(String::from));
+        let should_res = HashSet::from(["src/assets/b.jpg", "src/assets/a.jpg"].map(String::from));
         assert_eq!(import_collector.imports, should_res);
     }
 
