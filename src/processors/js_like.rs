@@ -32,7 +32,7 @@ impl ImportCollector {
     }
 
     fn common_insert(&mut self, path: &str) {
-        let real_path = path_to_real_path(self.current_file_path.as_str(), path);
+        let real_path = path_to_real_path(&self.current_file_path, path);
         if let Ok(s) = real_path {
             if s.contains("node_modules") {
                 return;
@@ -191,7 +191,7 @@ pub fn get_js_like_import_info() -> ImportCollector {
 // 用于产生src/开头的路径、文件或者依赖 后续会将文件夹路径统一还原为文件路径(如果有的话)
 fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<String, io::Error> {
     if import_path.starts_with("@/") {
-        return Ok(current_file_path.replace("@/", "src/"));
+        return Ok(import_path.replace("@/", "src/"));
     }
 
     if import_path.starts_with("..") || import_path.starts_with(".") {

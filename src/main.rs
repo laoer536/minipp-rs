@@ -11,30 +11,41 @@ use std::time::Instant;
 struct AllImport {
     imports: HashSet<String>,
     dependencies: HashSet<String>,
+    unused_imports: HashSet<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let start = Instant::now(); // 记录开始时间
-    let cli_arg_root_path =
-        get_project_root_path().expect("Failed to get the root path of the project.");
-    let minipp_config = load_user_config(&cli_arg_root_path);
+    let start = Instant::now();
+    let project_root = get_project_root_path()?;
+    let minipp_config = load_user_config(&project_root);
     println!("{:?}", minipp_config);
-    let js_like_import = get_js_like_import_info();
-    let style_like_import = get_style_like_import_info();
+
+    let js_import = get_js_like_import_info();
+    let style_import = get_style_like_import_info();
+
+    let all_imports: HashSet<_> = js_import
+        .imports
+        .iter()
+        .map(|imp| try_to_find_files_without_a_suffix(imp, &js_import.all_files))
+        .chain(style_import.imports)
+        .collect();
+
+    let unused_imports: HashSet<_> = js_import
+        .all_files
+        .difference(&all_imports)
+        .cloned()
+        .collect();
+
     let all_import = AllImport {
-        dependencies: js_like_import.dependencies,
-        imports: js_like_import
-            .imports
-            .into_iter()
-            .map(|i| try_to_find_files_without_a_suffix(&i, &js_like_import.all_files))
-            .chain(style_like_import.imports)
-            .collect::<HashSet<_>>(),
+        dependencies: js_import.dependencies,
+        imports: all_imports,
+        unused_imports,
     };
-    let all_import_str = serde_json::to_string_pretty(&all_import)?;
-    let mut file = File::create("minipp.report.json")?;
-    file.write_all(all_import_str.as_bytes())?;
-    println!("成功生成minipp.report.json文件！");
-    let duration = start.elapsed(); // 计算耗时
-    println!("Time elapsed: {:?}", duration);
+
+    let report = serde_json::to_string_pretty(&all_import)?;
+    File::create("minipp.report.json")?.write_all(report.as_bytes())?;
+
+    println!("成功生成 minipp.report.json 文件！");
+    println!("Time elapsed: {:?}", start.elapsed());
     Ok(())
 }
