@@ -1,16 +1,26 @@
 use glob::glob;
+use path_clean::{clean, PathClean};
 use regex::Regex;
 use std::collections::HashSet;
-use std::fs;
+use std::path::Path;
+use std::{fs, io};
 
 #[derive(Default, Debug)]
 pub struct StyleImportCollector {
     pub imports: HashSet<String>,
+    pub current_file_path: String,
 }
 
 impl StyleImportCollector {
     pub fn insert_from_code(&mut self, code: &str) {
-        let imports = get_extract_style_imports(code);
+        let imports = get_extract_style_imports(code).into_iter().map(|i| {
+            let real_path = path_to_real_path(&self.current_file_path, &i);
+            if let Ok(s) = real_path {
+                s
+            } else {
+                "unknown".to_string()
+            }
+        });
         self.imports.extend(imports);
     }
 }
@@ -54,7 +64,9 @@ pub fn get_style_like_import_info() -> StyleImportCollector {
             match entry {
                 Ok(path) => {
                     if path.is_file() {
-                        let code = fs::read_to_string(path).unwrap();
+                        let code = fs::read_to_string(&path).unwrap();
+                        style_import_collector.current_file_path =
+                            path.to_str().unwrap().to_string();
                         style_import_collector.insert_from_code(&code);
                     }
                 }
@@ -65,9 +77,31 @@ pub fn get_style_like_import_info() -> StyleImportCollector {
     style_import_collector
 }
 
+fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<String, io::Error> {
+    if import_path.starts_with("@/") {
+        return Ok(current_file_path.replace("@/", "src/"));
+    }
+    if import_path.starts_with("~") {
+        return if import_path.ends_with("~@") {
+            Ok(import_path.replace("~@", "src/"))
+        } else {
+            Ok(format!("{}(Non-project code file)", import_path))
+        };
+    }
+
+    let parent = Path::new(current_file_path)
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid path"))?;
+    let should_path = clean(parent.join(import_path));
+    should_path
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid path"))
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::processors::style_like::get_extract_style_imports;
+    use super::*;
     use std::collections::HashSet;
 
     #[test]
@@ -107,6 +141,18 @@ body {
                 .iter()
                 .collect::<HashSet<_>>(),
             should_res.iter().collect::<HashSet<_>>()
+        );
+    }
+
+    #[test]
+    fn test_path_to_real_path() {
+        assert_eq!(
+            path_to_real_path("src/foo/bar.less", "./common.less").unwrap(),
+            "src/foo/common.less".to_string()
+        );
+        assert_eq!(
+            path_to_real_path("src/foo/bar.less", "common.less").unwrap(),
+            "src/foo/common.less".to_string()
         );
     }
 }

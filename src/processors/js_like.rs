@@ -1,4 +1,4 @@
-use crate::common::has_file_extension;
+use crate::common::{get_project_root_path, has_file_extension};
 use glob::glob;
 use path_clean::clean;
 use std::collections::HashSet;
@@ -34,6 +34,9 @@ impl ImportCollector {
     fn common_insert(&mut self, path: &str) {
         let real_path = path_to_real_path(self.current_file_path.as_str(), path);
         if let Ok(s) = real_path {
+            if s.contains("node_modules") {
+                return;
+            }
             if s.starts_with("src/") {
                 self.imports.insert(s);
             } else {
@@ -56,23 +59,18 @@ impl Visit for ImportCollector {
         node.visit_children_with(self)
     }
     fn visit_import_decl(&mut self, import_node: &ImportDecl) {
-        let import = import_node.src.value.to_string();
-        self.common_insert(&import);
+        self.common_insert(&import_node.src.value);
         import_node.visit_children_with(self);
     }
 
     fn visit_jsx_attr(&mut self, node: &JSXAttr) {
         if let Some(value) = &node.value {
             match value {
-                JSXAttrValue::Lit(Lit::Str(s)) => {
-                    self.jsx_attr_insert(&s.value);
-                }
+                JSXAttrValue::Lit(Lit::Str(s)) => self.jsx_attr_insert(&s.value),
                 JSXAttrValue::JSXExprContainer(jsx_expr_container) => {
                     if let JSXExpr::Expr(expr) = &jsx_expr_container.expr {
                         match &**expr {
-                            Expr::Lit(Lit::Str(s)) => {
-                                self.jsx_attr_insert(&s.value);
-                            }
+                            Expr::Lit(Lit::Str(s)) => self.jsx_attr_insert(&s.value),
                             Expr::Tpl(tpl) => {
                                 for quasi in &tpl.quasis {
                                     self.jsx_attr_insert(&quasi.raw)
@@ -162,7 +160,7 @@ pub fn get_js_like_import_info() -> ImportCollector {
                     if path.is_file() {
                         match fs::read_to_string(&path) {
                             Ok(code) => {
-                                let module = parse_ts_or_tsx(code.as_str());
+                                let module = parse_ts_or_tsx(&code);
                                 match path.to_str() {
                                     Some(path) => {
                                         import_collector.current_file_path = path.to_string();
@@ -190,6 +188,7 @@ pub fn get_js_like_import_info() -> ImportCollector {
     import_collector
 }
 
+// 用于产生src/开头的路径、文件或者依赖 后续会将文件夹路径统一还原为文件路径(如果有的话)
 fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<String, io::Error> {
     if import_path.starts_with("@/") {
         return Ok(current_file_path.replace("@/", "src/"));
@@ -216,6 +215,16 @@ fn path_to_real_path(current_file_path: &str, import_path: &str) -> Result<Strin
                 "Path contains invalid UTF-8 characters",
             )
         })
+    } else if import_path.contains("src") {
+        let root = get_project_root_path()?;
+        let base = Path::new(&root);
+        let abs = Path::new(import_path);
+        Ok(abs
+            .strip_prefix(base)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            .to_str()
+            .unwrap()
+            .to_string())
     } else {
         Ok(import_path.to_string())
     }

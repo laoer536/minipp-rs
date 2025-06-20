@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::{env, fs};
+use std::{env, fs, io};
 
 #[derive(Default, Debug, Deserialize)]
 pub struct ProjectDependencies {
@@ -31,13 +31,13 @@ impl ProjectDependencies {
 #[derive(Default, Debug, Deserialize, PartialEq)]
 pub struct MinippConfig {
     #[serde(rename = "needDel")]
-    need_del: Option<bool>,
+    pub need_del: Option<bool>,
     #[serde(rename = "ignoreExt")]
-    ignore_ext: Option<Vec<String>>,
+    pub ignore_ext: Option<Vec<String>>,
     #[serde(rename = "ignoreFiles")]
-    ignore_files: Option<Vec<String>>,
+    pub ignore_files: Option<Vec<String>>,
     #[serde(rename = "ignoreDependencies")]
-    ignore_dependencies: Option<Vec<String>>,
+    pub ignore_dependencies: Option<Vec<String>>,
 }
 
 pub const BACK_UP_FOLDER: &str = "minipp-delete-files";
@@ -64,15 +64,28 @@ pub fn get_project_dependencies(project_root: &str) -> HashSet<String> {
     dependencies_info.all_dependencies()
 }
 
-pub fn get_cli_arg_root_path() -> Option<String> {
-    env::args().into_iter().nth(1)
+pub fn get_project_root_path() -> Result<String, io::Error> {
+    // 优先取命令行参数
+    if let Some(arg1) = env::args().nth(1) {
+        Ok(arg1)
+    } else {
+        // 没有参数则用当前目录
+        env::current_dir().and_then(|p| {
+            p.to_str()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid path"))
+                .map(|p| p.to_string())
+        })
+    }
 }
 
 pub fn load_user_config(project_root: &str) -> MinippConfig {
     let user_json_config_path = PathBuf::from(project_root).join("minipp.config.json");
-    let user_json_config_str = fs::read_to_string(user_json_config_path).unwrap();
-    let user_config: MinippConfig = serde_json::from_str(user_json_config_str.as_str()).unwrap();
-    user_config
+    if let Ok(config_json) = fs::read_to_string(user_json_config_path) {
+        let user_config: MinippConfig = serde_json::from_str(config_json.as_str()).unwrap();
+        user_config
+    } else {
+        MinippConfig::default()
+    }
 }
 
 pub fn has_file_extension(file_path: &str) -> bool {
@@ -103,6 +116,18 @@ pub fn multi_pattern_filter(files: &[String], patterns: &[String]) -> Vec<String
         })
         .cloned()
         .collect()
+}
+
+pub fn is_path_ignored(file: &str, patterns: &[String]) -> bool {
+    let mut builder = GitignoreBuilder::new("");
+    for pattern in patterns {
+        builder.add_line(None, pattern).unwrap();
+    }
+    let gitignore = builder.build().unwrap();
+
+    gitignore
+        .matched_path_or_any_parents(Path::new(file), false)
+        .is_ignore()
 }
 
 #[cfg(test)]
@@ -221,5 +246,13 @@ mod tests {
                 "baz/test.txt".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_is_path_ignored() {
+        let patterns = ["*.rs", "target/"].map(|i| i.to_string());
+        assert!(is_path_ignored("main.rs", &patterns));
+        assert!(is_path_ignored("target/foo.o", &patterns));
+        assert!(!is_path_ignored("foo/bar.txt", &patterns));
     }
 }
