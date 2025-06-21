@@ -74,6 +74,8 @@ cargo binstall minipp
 
 ## 🛠 Usage
 
+Execute in the root directory of your TS project or React+TS project.
+
 Simply run in your terminal:
 
 ```sh
