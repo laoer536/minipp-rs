@@ -20,8 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let minipp_config = load_user_config(&project_root);
     println!("{:?}", minipp_config);
 
-    let js_import = get_js_like_import_info();
-    let style_import = get_style_like_import_info();
+    let (js_import, style_import) = rayon::join(
+        || get_js_like_import_info(),
+        || get_style_like_import_info(),
+    );
 
     let all_imports: HashSet<_> = js_import
         .imports

@@ -1,8 +1,10 @@
 use crate::common::{get_project_root_path, has_file_extension};
 use glob::glob;
 use path_clean::clean;
+use rayon::prelude::*;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::{fs, io};
 use swc_common::errors::{ColorConfig, Handler};
 use swc_common::input::StringInput;
@@ -43,6 +45,12 @@ impl ImportCollector {
                 self.dependencies.insert(s);
             }
         }
+    }
+
+    fn merge_for_mutex(&mut self, mutex_self: Self) {
+        self.dependencies.extend(mutex_self.dependencies);
+        self.imports.extend(mutex_self.imports);
+        self.all_files.extend(mutex_self.all_files);
     }
 }
 
@@ -151,41 +159,44 @@ pub fn try_to_find_files_without_a_suffix(
 }
 
 pub fn get_js_like_import_info() -> ImportCollector {
-    let mut import_collector = ImportCollector::default();
     let patterns = ["src/**/*.ts", "src/**/*.tsx"];
-    for pattern in patterns {
-        for entry in glob(pattern).expect("Failed to read glob pattern") {
-            match entry {
-                Ok(path) => {
-                    if path.is_file() {
-                        match fs::read_to_string(&path) {
-                            Ok(code) => {
-                                let module = parse_ts_or_tsx(&code);
-                                match path.to_str() {
-                                    Some(path) => {
-                                        import_collector.current_file_path = path.to_string();
-                                        import_collector.all_files.insert(path.to_string());
-                                    }
-                                    None => continue,
-                                };
-                                // path.to_str().unwrap().to_string();
-                                module.visit_with(&mut import_collector);
-                            }
-                            Err(e) => {
-                                println!("{:?}", e);
-                                continue;
-                            }
-                        }
-                    }
+    // 单步并发：同时完成文件检查和内容读取
+    let file_contents: Vec<(PathBuf, String)> = patterns
+        .iter()
+        .flat_map(|pattern| {
+            glob(pattern)
+                .expect("Failed to read glob pattern")
+                .filter_map(Result::ok)
+        })
+        .par_bridge()
+        .filter_map(|path| {
+            // 一步完成文件检查和读取
+            match (path.is_file(), fs::read_to_string(&path)) {
+                (true, Ok(content)) => Some((path, content)),
+                (true, Err(e)) => {
+                    println!("读取失败: {:?}", e);
+                    None
                 }
-                Err(e) => {
-                    println!("{:?}", e);
-                    continue;
-                }
+                _ => None,
             }
-        }
-    }
-    import_collector
+        })
+        .collect();
+
+    let collector = Mutex::new(ImportCollector::default());
+    file_contents.par_iter().for_each(|(path, code)| {
+        let path_str = match path.to_str() {
+            Some(p) => p,
+            None => return,
+        };
+        let module = parse_ts_or_tsx(code);
+        let mut local_collector = ImportCollector::default();
+        local_collector.current_file_path = path_str.to_string();
+        local_collector.all_files.insert(path_str.to_string());
+        module.visit_with(&mut local_collector);
+        let mut global_collector = collector.lock().unwrap();
+        global_collector.merge_for_mutex(local_collector);
+    });
+    collector.into_inner().unwrap()
 }
 
 // 用于产生src/开头的路径、文件或者依赖 后续会将文件夹路径统一还原为文件路径(如果有的话)
