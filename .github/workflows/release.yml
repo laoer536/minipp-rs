@@ -16,7 +16,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: minipp-linux-x86_64.tar.gz
-          # Linux aarch64
+          # Linux arm64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: minipp-linux-arm64.tar.gz
@@ -24,7 +24,7 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: minipp-macos-x86_64.tar.gz
-          # macOS aarch64 (Apple Silicon M1/M2)
+          # macOS arm64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: minipp-macos-arm64.tar.gz
@@ -36,16 +36,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 缓存 Rust 依赖，加速构建
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: 1.87.0
           override: true
           target: ${{ matrix.target }}
 
-      - name: Install cross (for cross-compiling)
+      # 仅在交叉编译 Linux ARM64 时用 cross
+      - name: Install cross
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cargo install cross
 
+      # 编译
       - name: Build (native/cross)
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
@@ -55,26 +66,27 @@ jobs:
           fi
         shell: bash
 
+      # 打包
       - name: Prepare artifact
         run: |
-          mkdir dist
+          mkdir -p dist
           BIN_NAME=minipp
           TARGET_DIR=target/${{ matrix.target }}/release
-          # Windows需加.exe
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          if [[ "${{ matrix.os }}" == "Windows" ]]; then
             cp $TARGET_DIR/$BIN_NAME.exe dist/
-            7z a ../${{ matrix.artifact }} dist/$BIN_NAME.exe
+            7z a dist/${{ matrix.artifact }} dist/$BIN_NAME.exe
           else
             cp $TARGET_DIR/$BIN_NAME dist/
-            tar -czvf ../${{ matrix.artifact }} -C dist $BIN_NAME
+            tar -czvf dist/${{ matrix.artifact }} -C dist $BIN_NAME
           fi
         shell: bash
 
+      # 上传产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ../${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
 
   release:
     needs: build
