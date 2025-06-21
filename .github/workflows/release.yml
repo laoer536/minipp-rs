@@ -1,248 +1,91 @@
-name: Release minipp CLI
+name: Release minipp
 
 on:
   push:
-    tags: [ 'v*.*.*' ]  # 语义化版本标签触发
+    tags:
+      - 'v*'
 
 jobs:
-  build-cli:
-    name: Build minipp for ${{ matrix.target }}
+  build:
+    name: Build and Package (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          # Linux 目标
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            bin_name: minipp
-            archive_ext: tar.gz
-            install_path: /usr/local/bin
-
-          # macOS 目标
-          - target: x86_64-apple-darwin
-            os: macos-14
-            bin_name: minipp
-            archive_ext: tar.gz
-            install_path: /usr/local/bin
-
-          # Apple Silicon 目标
-          - target: aarch64-apple-darwin
-            os: macos-14
-            bin_name: minipp
-            archive_ext: tar.gz
-            install_path: /usr/local/bin
-
-          # Windows 目标
-          - target: x86_64-pc-windows-msvc
-            os: windows-2022
-            bin_name: minipp.exe
-            archive_ext: zip
-            install_path: 'C:\\Program Files\\minipp'
-
-          # ARM Linux 目标
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
-            bin_name: minipp
-            archive_ext: tar.gz
-            install_path: /usr/local/bin
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: minipp-linux-x86_64.tar.gz
+          # Linux aarch64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: minipp-linux-arm64.tar.gz
+          # macOS x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: minipp-macos-x86_64.tar.gz
+          # macOS aarch64 (Apple Silicon M1/M2)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: minipp-macos-arm64.tar.gz
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: minipp-windows-x86_64.zip
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rs/toolchain@v1
         with:
+          toolchain: 1.87.0
+          override: true
           target: ${{ matrix.target }}
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
+      - name: Install cross (for cross-compiling)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo install cross
 
-      - name: Strip debug symbols (Unix)
-        if: runner.os != 'Windows'
-        run: strip target/${{ matrix.target }}/release/${{ matrix.bin_name }}
-
-      - name: Prepare package
+      - name: Build (native/cross)
         run: |
-          mkdir -p package
-          cp target/${{ matrix.target }}/release/${{ matrix.bin_name }} package/
-          
-          # 创建安装脚本 (Unix)
-          if [ "${{ runner.os }}" != "Windows" ]; then
-            cat > package/install.sh <<'INSTALL_EOF'
-  #!/bin/bash
-  BIN_NAME="minipp"
-  INSTALL_PATH="/usr/local/bin"
-  
-  echo "Installing $BIN_NAME to $INSTALL_PATH"
-  sudo cp "$BIN_NAME" "$INSTALL_PATH"
-echo "Installation complete! Try: $BIN_NAME --help"
-  INSTALL_EOF
-  chmod +x package/install.sh
-  else
-  # Windows 安装脚本
-  cat > package/install.bat <<'INSTALL_EOF'
-  @echo off
-  set BIN_NAME=minipp.exe
-  set INSTALL_PATH="C:\Program Files\minipp"
-  
-  echo Installing %BIN_NAME% to %INSTALL_PATH%
-  mkdir %INSTALL_PATH% > nul 2>&1
-  copy /Y "%BIN_NAME%" "%INSTALL_PATH%"
-echo Installation complete! Try: %BIN_NAME% --help
-  INSTALL_EOF
-  fi
-  
-  # 创建 README - 使用自定义分隔符避免冲突
-  cat > package/README.txt <<'README_EOF'
-  minipp Command Line Tool $VERSION
-  
-  minipp is a powerful command line tool.
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
 
-To install:
-  * Linux/macOS:
-      tar xzf minipp-$TARGET.tar.gz
-      ./install.sh
+      - name: Prepare artifact
+        run: |
+          mkdir dist
+          BIN_NAME=minipp
+          TARGET_DIR=target/${{ matrix.target }}/release
+          # Windows需加.exe
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp $TARGET_DIR/$BIN_NAME.exe dist/
+            7z a ../${{ matrix.artifact }} dist/$BIN_NAME.exe
+          else
+            cp $TARGET_DIR/$BIN_NAME dist/
+            tar -czvf ../${{ matrix.artifact }} -C dist $BIN_NAME
+          fi
+        shell: bash
 
-  * Windows:
-      Unzip minipp-$TARGET.zip
-      Run install.bat as Administrator
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ../${{ matrix.artifact }}
 
-After installation, run:
-    minipp --help
-      README_EOF
-  
-  # 替换 README 中的变量
-      sed -i "s/\$VERSION/${{ github.ref_name }}/g" package/README.txt
-      sed -i "s/\$TARGET/${{ matrix.target }}/g" package/README.txt
-      
-      - name: Create checksum
-run: |
-  cd package
-  shasum -a 256 ${{ matrix.bin_name }} > ${{ matrix.bin_name }}.sha256
-  echo "Checksum: $(cat ${{ matrix.bin_name }}.sha256)" >> README.txt
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
 
-  - name: Create distribution archive
-    run: |
-      cd package
-      if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
-        tar czf minipp-${{ matrix.target }}.${{ matrix.archive_ext }} *
-      else
-        7z a -tzip minipp-${{ matrix.target }}.${{ matrix.archive_ext }} * > /dev/null
-      fi
-
-  - name: Upload artifact
-    uses: actions/upload-artifact@v3
-    with:
-      name: minipp-${{ matrix.target }}
-      path: package/minipp-${{ matrix.target }}.${{ matrix.archive_ext }}
-
-create-release:
-          name: Create Release
-          runs-on: ubuntu-22.04
-          needs: build-cli
-          steps:
-            - name: Download artifacts
-              uses: actions/download-artifact@v3
-              with:
-                path: artifacts
-
-            - name: Create universal install script
-              # 使用单引号避免变量扩展问题
-              run: |
-                cat > install-minipp.sh <<'SCRIPT_EOF'
-  #!/bin/bash
-  set -e
-  
-  # 自动检测平台
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-  ARCH=$(uname -m)
-  
-  case "$ARCH" in
-  x86_64) ARCH="x86_64" ;;
-  arm64)  ARCH="aarch64" ;;
-  *)      echo "Unsupported architecture: $ARCH"; exit 1 ;;
-  esac
-  
-  # 特殊处理 macOS ARM
-  if [ "$OS" = "darwin" ] && [ "$ARCH" = "arm64" ]; then
-  TARGET="aarch64-apple-darwin"
-  elif [ "$OS" = "darwin" ]; then
-  TARGET="x86_64-apple-darwin"
-  elif [ "$OS" = "linux" ] && [ "$ARCH" = "x86_64" ]; then
-  TARGET="x86_64-unknown-linux-gnu"
-  elif [ "$OS" = "linux" ] && [ "$ARCH" = "aarch64" ]; then
-  TARGET="aarch64-unknown-linux-gnu"
-  else
-echo "Unsupported platform: $OS-$ARCH"
-                              exit 1
-                              fi
-                              
-                              VERSION="${1:-latest}"
-                              REPO="${GITHUB_REPO:-$GITHUB_REPOSITORY}"
-                              URL="https://github.com/$REPO/releases/download/$VERSION/minipp-$TARGET.tar.gz"
-                              
-                              echo "Downloading minipp for $TARGET..."
-                              curl -L -o minipp-bundle.tar.gz "$URL"
-                              
-                              echo "Extracting..."
-                              tar xzf minipp-bundle.tar.gz
-                              
-                              if [ -f "./install.sh" ]; then
-                              chmod +x install.sh
-                              sudo ./install.sh
-                              elif [ -f "./install.bat" ]; then
-                              echo "Please run install.bat as Administrator on Windows"
-                              else
-                              echo "No installation script found!"
-                              exit 1
-                              fi
-                              
-                              echo "Cleaning up..."
-                              rm minipp-bundle.tar.gz install.* README.txt *.sha256 2>/dev/null || true
-                              
-                              echo "✅ minipp installed successfully! Run 'minipp --help' to get started."
-                              SCRIPT_EOF
-                              
-                              chmod +x install-minipp.sh
-                              
-                              - name: Create GitHub Release
-uses: softprops/action-gh-release@v1
-with:
-  tag_name: ${{ github.ref_name }}
-  name: "minipp ${{ github.ref_name }}"
-  # 使用单引号避免YAML解析问题
-  body: |
-    ## minipp Command Line Tool
-    
-    ### One-line Install (Linux/macOS)
-    ```bash
-    curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install-minipp.sh | bash
-    ```
-    
-    ### Windows Users
-    Download the appropriate ZIP file and run `install.bat` as Administrator
-    
-    ### Manual Installation
-    1. Download the package for your platform
-    2. Extract the archive
-    3. Run the install script
-    
-    ### Verification
-    Verify downloaded files with:
-    ```bash
-    shasum -a 256 -c minipp.sha256
-    ```
-    
-    ### Getting Started
-    After installation, run:
-    ```bash
-    minipp --help
-    ```
-  files: |
-    artifacts/*
-    install-minipp.sh
-env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/**/*.tar.gz,./artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
