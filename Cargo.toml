@@ -1,6 +1,6 @@
 [package]
 name = "minipp_rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Quickly help you find files that are not being used in your project, and slim down your project."
 authors = ["laoer536 <https://neo-liu.netlify.app/>"]
