@@ -1,5 +1,5 @@
 use glob::glob;
-use path_clean::{clean, PathClean};
+use path_clean::clean;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::Path;
