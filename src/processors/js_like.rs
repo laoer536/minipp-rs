@@ -10,7 +10,9 @@ use swc_common::errors::{ColorConfig, Handler};
 use swc_common::input::StringInput;
 use swc_common::sync::Lrc;
 use swc_common::{FileName, SourceMap};
-use swc_ecma_ast::{CallExpr, Callee, EsVersion, Expr, ImportDecl, JSXAttr, JSXExpr, Module};
+use swc_ecma_ast::{
+    CallExpr, Callee, EsVersion, ExportAll, Expr, ImportDecl, JSXAttr, JSXExpr, Module, NamedExport,
+};
 use swc_ecma_ast::{JSXAttrValue, Lit};
 use swc_ecma_parser::{Lexer, Parser, Syntax, TsSyntax};
 use swc_ecma_visit::{Visit, VisitWith};
@@ -66,6 +68,11 @@ impl Visit for ImportCollector {
         }
         node.visit_children_with(self)
     }
+    fn visit_export_all(&mut self, node: &ExportAll) {
+        self.common_insert(&node.src.value);
+        node.visit_children_with(self);
+    }
+
     fn visit_import_decl(&mut self, import_node: &ImportDecl) {
         self.common_insert(&import_node.src.value);
         import_node.visit_children_with(self);
@@ -92,6 +99,12 @@ impl Visit for ImportCollector {
             }
         }
         node.visit_children_with(self)
+    }
+    fn visit_named_export(&mut self, node: &NamedExport) {
+        if let Some(s) = &node.src {
+            self.common_insert(&s.value)
+        }
+        node.visit_children_with(self);
     }
 }
 
