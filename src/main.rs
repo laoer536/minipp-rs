@@ -1,4 +1,4 @@
-use minipp_rs::common::{get_project_root_path, load_user_config};
+use minipp_rs::common::{get_project_dependencies, get_project_root_path, load_user_config};
 use minipp_rs::processors::js_like::{get_js_like_import_info, try_to_find_files_without_a_suffix};
 use minipp_rs::processors::style_like::get_style_like_import_info;
 use serde::Serialize;
@@ -12,6 +12,7 @@ struct AllImport {
     imports: HashSet<String>,
     dependencies: HashSet<String>,
     unused_imports: HashSet<String>,
+    unused_dependencies: HashSet<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,10 +39,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .collect();
 
+    let project_dependencies = get_project_dependencies(&project_root);
+    let unused_dependencies: HashSet<_> = project_dependencies
+        .iter()
+        .filter(|dep| {
+            !js_import
+                .dependencies
+                .iter()
+                .any(|imp| imp == *dep || imp.starts_with(&format!("{}/", dep)))
+        })
+        .cloned()
+        .collect();
+
     let all_import = AllImport {
         dependencies: js_import.dependencies,
         imports: all_imports,
         unused_imports,
+        unused_dependencies,
     };
 
     let report = serde_json::to_string_pretty(&all_import)?;

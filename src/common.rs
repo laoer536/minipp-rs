@@ -55,7 +55,8 @@ pub const SUPPORT_FILE_TYPES_WITH_DOT: [&str; 18] = with_dot![
 
 pub fn get_project_dependencies(project_root: &str) -> HashSet<String> {
     let package_json_path = PathBuf::from(project_root).join("package.json");
-    let package_json_str = fs::read_to_string(package_json_path).unwrap();
+    let package_json_str =
+        fs::read_to_string(package_json_path).expect("Unable to read package.json");
     let pkg_json: ProjectDependencies = serde_json::from_str(package_json_str.as_str()).unwrap();
     let dependencies_info = ProjectDependencies {
         dependencies: pkg_json.dependencies,
